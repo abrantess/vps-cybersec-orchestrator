@@ -158,5 +158,5 @@ Contributions from the global DevSecOps, SRE, and AI engineering community are w
 Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more information.
 
 <div align="center">
-<sub>Authored by <b>Francisco Abrantes</b> (<a href="https://github.com/abrantess">@abrantess</a>) • Independent AI Systems Architect.</sub>
+<sub>Authored by <b>Abrantes AI Architect</b> (<a href="https://github.com/abrantess">@abrantess</a>) • Independent AI Systems Architect.</sub>
 </div>
