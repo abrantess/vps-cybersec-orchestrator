@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PhaseTrackingTreeManifest",
+  "description": "Schema for Autonomous DevSecOps Phase Tracking Tree (PTT) state audit and idempotent hardening orchestration.",
+  "type": "object",
+  "required": ["version", "target_host", "timestamp", "phases", "findings_summary"],
+  "properties": {
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "target_host": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "operator_mode": { "type": "string", "enum": ["HUMAN_OPERATOR", "AI_AGENT", "HYBRID_DEVSECOPS"] },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["phase_id", "name", "status", "tasks"],
+        "properties": {
+          "phase_id": { "type": "string" },
+          "name": { "type": "string" },
+          "status": { "type": "string", "enum": ["PENDING", "IN_PROGRESS", "COMPLETED", "BLOCKED"] },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["task_id", "title", "status"],
+              "properties": {
+                "task_id": { "type": "string" },
+                "title": { "type": "string" },
+                "status": { "type": "string", "enum": ["PENDING", "PASSED", "WARNING", "FAILED"] },
+                "evidence_ref": { "type": "string" },
+                "cwe_id": { "type": "string" },
+                "cis_reference": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "findings_summary": {
+      "type": "object",
+      "required": ["critical", "high", "medium", "low", "informative"],
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "high": { "type": "integer", "minimum": 0 },
+        "medium": { "type": "integer", "minimum": 0 },
+        "low": { "type": "integer", "minimum": 0 },
+        "informative": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
