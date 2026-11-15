@@ -1,0 +1,46 @@
+{
+  "version": "1.0.0",
+  "target_host": "production-vps-node-01",
+  "timestamp": "2026-11-15T12:00:00Z",
+  "operator_mode": "HYBRID_DEVSECOPS",
+  "telemetry": {
+    "kernel": "Linux 6.8.0-generic x86_64 Ubuntu 24.04 LTS",
+    "uptime": "up 2 weeks, 4 days",
+    "sysctl_sample": [
+      "fs.protected_hardlinks = 1",
+      "fs.protected_symlinks = 1",
+      "fs.suid_dumpable = 2",
+      "kernel.randomize_va_space = 2",
+      "kernel.kptr_restrict = 1"
+    ],
+    "open_sockets_count": 14,
+    "docker_live_restore": true
+  },
+  "findings": [
+    {
+      "id": "SEC-SSH-01",
+      "severity": "HIGH",
+      "cwe": "CWE-308",
+      "cis": "CIS Linux 5.2.11",
+      "title": "Password Authentication enabled in OpenSSH",
+      "impact": "Allows brute-force and credential stuffing against SSH daemon.",
+      "remediation": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config.d/99-hardening.conf"
+    },
+    {
+      "id": "SEC-SYS-01",
+      "severity": "MEDIUM",
+      "cwe": "CWE-1188",
+      "cis": "CIS Linux 3.2.1",
+      "title": "ICMP Redirects accepted by kernel",
+      "impact": "Exposes host to routing table manipulation.",
+      "remediation": "net.ipv4.conf.all.accept_redirects = 0 in /etc/sysctl.d/99-vps-hardening.conf"
+    }
+  ],
+  "findings_summary": {
+    "critical": 0,
+    "high": 1,
+    "medium": 1,
+    "low": 0,
+    "informative": 2
+  }
+}
