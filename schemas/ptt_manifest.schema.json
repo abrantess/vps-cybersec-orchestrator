@@ -46,6 +46,8 @@
         "low": { "type": "integer", "minimum": 0 },
         "informative": { "type": "integer", "minimum": 0 }
       }
-    }
+    },
+    "telemetry": { "type": "object" },
+    "findings": { "type": "array" }
   }
 }
