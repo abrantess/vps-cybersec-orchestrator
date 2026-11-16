@@ -1,19 +1,114 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "target_host": "production-vps-node-01",
   "timestamp": "2026-11-15T12:00:00Z",
   "operator_mode": "HYBRID_DEVSECOPS",
+  "phases": [
+    {
+      "phase_id": "P1_BASELINE",
+      "name": "Host Baseline & Kernel Configuration",
+      "status": "COMPLETED",
+      "tasks": [
+        {
+          "task_id": "T1.1",
+          "title": "Kernel release and tainted status audit",
+          "status": "PASSED",
+          "evidence_ref": "kernel_arch.txt"
+        },
+        {
+          "task_id": "T1.2",
+          "title": "Sysctl memory & network mitigations audit",
+          "status": "WARNING",
+          "evidence_ref": "sysctl_critical.txt",
+          "cis_reference": "CIS Linux 3.2"
+        }
+      ]
+    },
+    {
+      "phase_id": "P2_NETWORK_ACCESS",
+      "name": "Network Attack Surface & Access Control",
+      "status": "COMPLETED",
+      "tasks": [
+        {
+          "task_id": "T2.1",
+          "title": "Listening sockets (ss -tulnp) enumeration",
+          "status": "PASSED",
+          "evidence_ref": "listening_sockets.txt"
+        },
+        {
+          "task_id": "T2.2",
+          "title": "Firewall state & default-deny enforcement",
+          "status": "PASSED",
+          "evidence_ref": "ufw_status.txt",
+          "cis_reference": "CIS Linux 3.5"
+        },
+        {
+          "task_id": "T2.3",
+          "title": "OpenSSH daemon configuration validation",
+          "status": "WARNING",
+          "evidence_ref": "sshd_active.txt",
+          "cis_reference": "CIS Linux 5.2"
+        }
+      ]
+    },
+    {
+      "phase_id": "P3_CONTAINERS_SECRETS",
+      "name": "Container Daemons & Sensitive Permissions",
+      "status": "COMPLETED",
+      "tasks": [
+        {
+          "task_id": "T3.1",
+          "title": "Container runtime daemon options inspection",
+          "status": "PASSED",
+          "evidence_ref": "docker_info.txt"
+        }
+      ]
+    },
+    {
+      "phase_id": "P4_PERSISTENCE",
+      "name": "Persistence Mechanisms & Integrity",
+      "status": "COMPLETED",
+      "tasks": [
+        {
+          "task_id": "T4.1",
+          "title": "/etc/ld.so.preload inspection",
+          "status": "PASSED",
+          "evidence_ref": "ld_preload.txt"
+        },
+        {
+          "task_id": "T4.2",
+          "title": "Cron jobs & systemd timers audit",
+          "status": "PASSED",
+          "evidence_ref": "crons.txt"
+        }
+      ]
+    },
+    {
+      "phase_id": "P5_HARDENING_READINESS",
+      "name": "Idempotent Hardening & Safety Posture",
+      "status": "COMPLETED",
+      "tasks": [
+        {
+          "task_id": "T5.1",
+          "title": "Anti-lockout Dead-Man's Switch readiness",
+          "status": "PASSED",
+          "evidence_ref": "bin/anti_lockout_guard.sh"
+        }
+      ]
+    }
+  ],
+  "findings_summary": {
+    "critical": 0,
+    "high": 1,
+    "medium": 1,
+    "low": 0,
+    "informative": 0
+  },
   "telemetry": {
     "kernel": "Linux 6.8.0-generic x86_64 Ubuntu 24.04 LTS",
     "uptime": "up 2 weeks, 4 days",
-    "sysctl_sample": [
-      "fs.protected_hardlinks = 1",
-      "fs.protected_symlinks = 1",
-      "fs.suid_dumpable = 2",
-      "kernel.randomize_va_space = 2",
-      "kernel.kptr_restrict = 1"
-    ],
     "open_sockets_count": 14,
+    "firewall_active": true,
     "docker_live_restore": true
   },
   "findings": [
@@ -24,7 +119,7 @@
       "cis": "CIS Linux 5.2.11",
       "title": "Password Authentication enabled in OpenSSH",
       "impact": "Allows brute-force and credential stuffing against SSH daemon.",
-      "remediation": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config.d/99-hardening.conf"
+      "remediation": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config.d/00-vps-hardening.conf"
     },
     {
       "id": "SEC-SYS-01",
@@ -32,15 +127,8 @@
       "cwe": "CWE-1188",
       "cis": "CIS Linux 3.2.1",
       "title": "ICMP Redirects accepted by kernel",
-      "impact": "Exposes host to routing table manipulation.",
-      "remediation": "net.ipv4.conf.all.accept_redirects = 0 in /etc/sysctl.d/99-vps-hardening.conf"
+      "impact": "Exposes host to malicious routing table modification.",
+      "remediation": "Set 'net.ipv4.conf.all.accept_redirects = 0' in /etc/sysctl.d/99-vps-hardening.conf"
     }
-  ],
-  "findings_summary": {
-    "critical": 0,
-    "high": 1,
-    "medium": 1,
-    "low": 0,
-    "informative": 2
-  }
+  ]
 }
