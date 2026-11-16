@@ -1,6 +1,6 @@
 <div align="center">
 
-# VPS CyberSec Orchestrator
+# VPS CyberSec Orchestrator (v1.0.1)
 ### Autonomous Linux VPS Security Auditor, Attack Surface Analyzer & Idempotent Hardening Orchestrator
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
@@ -29,7 +29,8 @@ Modern infrastructure security demands bridging **Mechanical Determinism (Old Sc
 │   [OLD SCHOOL: DETERMINISTIC BARE-METAL CONTROLS]                                      │
 │   ┌────────────────────────────────────────────────────────────────────────────────┐   │
 │   │  POSIX / Bash Collector • CIS Sysctl Hardening • UFW / Netfilter Micro-Rules   │   │
-│   │  OpenSSH Strict Key-Only Config • Fail2ban Protection • Dead-Man's Switch      │   │
+│   │  OpenSSH Dynamic Port Detection • First-Match 00- Drop-in Priority             │   │
+│   │  Dead-Man's Switch Rollback Guard • Secure /root/.vps_anti_lockout_backup (0700)│   │
 │   └───────────────────────────────────────┬────────────────────────────────────────┘   │
 │                                           │                                            │
 │                                           ▼                                            │
@@ -42,7 +43,7 @@ Modern infrastructure security demands bridging **Mechanical Determinism (Old Sc
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Mechanical Determinism (Old School):** Idempotent state convergence, kernel memory mitigations (`sysctl`), strict firewall policies (`UFW`/`iptables`), automated key rotation, and cryptographic verification.
+1. **Mechanical Determinism (Old School):** Idempotent state convergence, kernel memory mitigations (`sysctl`), strict firewall policies (`UFW`/`iptables`), dynamic active SSH port detection, first-match drop-in precedence (`00-vps-hardening.conf`), and cryptographic verification.
 2. **Cognitive Orchestration (New School):** Structured state tracking via **Phase Tracking Tree (PTT)** schemas, preventing context loss in autonomous agent workflows, enforcing zero-hallucination evidence validation, and outputting clean JSON/Markdown artifacts.
 
 ---
@@ -69,14 +70,14 @@ flowchart TD
 |:---:|---|---|
 | **1** | **Baseline Discovery** | Non-destructive extraction of kernel release, architecture, uptime, active systemd services, and sysctl baseline. |
 | **2** | **Attack Surface & Access** | Audit of OpenSSH daemon config, PAM policies, listening sockets (`ss -tulnp`), and firewall rules. |
-| **3** | **Containers & Secrets** | Detection of Docker/Podman daemon configurations, rootless mode, socket permissions (`/var/run/docker.sock`), and volume mounts. |
-| **4** | **Hybrid Instrumentation** | Structured integration with Lynis, OpenSCAP, Nmap, and auditd with evidence triage (Confirmed vs. Heuristic). |
-| **5** | **PTT State Tracking** | Maintaining cognitive session state via JSON-Schema (`schemas/ptt_manifest.schema.json`) to prevent context drift. |
+| **3** | **Containers & Secrets** | Detection of Docker/Podman daemon configurations, rootless mode, socket permissions (`/var/run/docker.sock`), and container port exposure. |
+| **4** | **Hybrid Instrumentation** | Structured evidence collection and triage (Confirmed vs. Heuristic) with automated JSON/Markdown generation. |
+| **5** | **PTT State Tracking** | Maintaining cognitive session state across 5 formal phases via JSON-Schema (`schemas/ptt_manifest.schema.json`). |
 | **6** | **Zero-Exploitation** | Strict adherence to read-only non-destructive auditing: no brute-force, no DoS, and zero credential printing. |
-| **7** | **Anti-Lockout Protocol** | Arming an automatic dead-man's switch rollback timer before touching any network, firewall, or SSH settings. |
+| **7** | **Anti-Lockout Protocol** | Arming an automatic dead-man's switch rollback timer (stored in mode 0700) before touching any network, firewall, or SSH settings. |
 | **8** | **Formal Risk Prioritization** | Mapping findings against CWE (Common Weakness Enumeration) and CIS Linux Benchmark levels. |
-| **9** | **Idempotent Hardening** | Re-runnable, state-convergent shell scripts with `--dry-run` simulation flags. |
-| **10** | **Persistence Detection** | Inspection of `/etc/ld.so.preload`, crontabs, systemd timers, unlinked open files, and kernel taints. |
+| **9** | **Idempotent Hardening** | Re-runnable, state-convergent shell scripts with `--dry-run` simulation flags and dynamic SSH port detection. |
+| **10** | **Persistence Detection** | Inspection of `/etc/ld.so.preload`, crontabs, systemd timers, and SUID/SGID binaries. |
 | **11** | **Controlled Initialization** | Initial scope bounding and interactive questionnaire to prevent accidental collateral disruption. |
 
 ---
@@ -96,7 +97,7 @@ sudo bash bin/vps_audit.sh ./reports
 ```
 
 *Output:*
-- `./reports/vps_audit_<HOSTNAME>_<TIMESTAMP>.json`: Machine-readable telemetry for AI Agents, SIEM, or CI/CD pipelines.
+- `./reports/vps_audit_<HOSTNAME>_<TIMESTAMP>.json`: Machine-readable telemetry conforming 100% to `schemas/ptt_manifest.schema.json`.
 - `./reports/vps_audit_<HOSTNAME>_<TIMESTAMP>.md`: Formatted executive Markdown summary.
 
 ---
@@ -117,19 +118,30 @@ Apply CIS-compliant system hardening with an automatic 5-minute safety rollback 
 sudo bash bin/vps_harden.sh --confirm
 ```
 
-> 🛡️ **Zero-Lockout Protection:** The hardening engine automatically arms `bin/anti_lockout_guard.sh` for 5 minutes. If network connectivity fails, the server automatically disables the firewall and restores the original SSH configuration. Once you confirm active connectivity, the switch is safely disarmed.
+> 🛡️ **Zero-Lockout Verification Workflow:**
+> 1. The hardening engine automatically arms `bin/anti_lockout_guard.sh` for **5 minutes** before mutating firewall or SSH configurations.
+> 2. **DO NOT CLOSE YOUR ACTIVE TERMINAL.** Open a **new terminal window** and verify connectivity:
+>    ```bash
+>    ssh -p <SSH_PORT> user@<vps_ip>
+>    ```
+> 3. Once connectivity is confirmed in the new session, explicitly disarm the safety switch:
+>    ```bash
+>    sudo bash bin/anti_lockout_guard.sh disarm
+>    ```
+> 4. If connectivity is lost or unverified, the server **automatically rolls back** firewall rules, deletes conflicting drop-ins, and restores original SSH configs after 5 minutes.
 
 ---
 
 ## 🔒 Automated Hardening Matrix
 
-| Component | Default Unhardened State | Hardened State Enforced | CIS Linux Benchmark |
+| Component | Default Unhardened State | Hardened State Enforced (v1.0.1) | CIS Linux Benchmark |
 |---|---|---|---|
-| **SSH Daemon** | Password auth enabled, root password login allowed | `PasswordAuthentication no`, `PermitRootLogin prohibit-password`, `MaxAuthTries 3` | CIS 5.2.10, 5.2.11 |
+| **SSH Daemon** | Password auth enabled, root password login allowed | `PasswordAuthentication no`, `PermitRootLogin prohibit-password`, `MaxAuthTries 3` (in `00-vps-hardening.conf`) | CIS 5.2.10, 5.2.11 |
+| **Dynamic SSH Port** | Hardcoded port 22 assumptions | Dynamically queries `sshd -T` and binds UFW rules to the active SSH port | CIS 3.5.1 |
 | **Kernel Sysctl** | ICMP redirects accepted, martians unlogged | `accept_redirects = 0`, `log_martians = 1`, `rp_filter = 1`, `tcp_syncookies = 1` | CIS 3.2.1 - 3.2.8 |
 | **Memory ASLR** | Variable randomization level | `kernel.randomize_va_space = 2` (Full ASLR) | CIS 1.6.2 |
-| **Host Firewall** | Default allow / unconfigured | `UFW` default deny incoming, rate-limited SSH (22), allowed web ports | CIS 3.5.1 |
-| **Docker Daemon** | Live restore disabled | `{"live-restore": true}` in `/etc/docker/daemon.json` | CIS Docker 2.1 |
+| **Host Firewall** | Default allow / unconfigured | `UFW` default deny incoming, rate-limited active SSH port, allowed web ports | CIS 3.5.1 |
+| **Docker Daemon** | Live restore disabled / socket exposed | Safe merge of `{"live-restore": true}` in `/etc/docker/daemon.json` | CIS Docker 2.1 |
 
 ---
 
@@ -137,8 +149,17 @@ sudo bash bin/vps_harden.sh --confirm
 
 This repository is natively architected for consumption by autonomous AI agents (Anthropic Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode):
 
-- **PTT State Schema:** `schemas/ptt_manifest.schema.json` defines the contract for multi-turn reasoning trees.
+- **PTT State Schema:** `schemas/ptt_manifest.schema.json` defines the contract for 5-phase multi-turn reasoning trees.
 - **Sample Agent Output:** `examples/audit_report_sample.json` provides the target JSON structure for programmatic ingestion.
+
+---
+
+## 🗺️ Roadmap & Ecosystem Integrations
+
+- [ ] Automated integration with Lynis & OpenSCAP local benchmark harnesses.
+- [ ] Native Nmap external attack surface differential scanners.
+- [ ] eBPF runtime network packet inspection for container bridge monitoring.
+- [ ] Automated SSH key rotation and cryptographic expiration alerting.
 
 ---
 
