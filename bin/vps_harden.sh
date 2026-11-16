@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# VPS CyberSec Orchestrator — Idempotent Hardening Engine
+# VPS CyberSec Orchestrator — Idempotent Hardening Engine (v1.0.1)
 # CIS Linux Benchmark & DevSecOps Compliance Automator
-# Includes automated Dead-Man's Switch Anti-Lockout Protection.
+# Security: Includes dynamic SSH port detection and Dead-Man's Switch protection.
 # =============================================================================
 set -euo pipefail
 LC_ALL=C
@@ -21,7 +21,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "========================================================================"
-echo "🛡️  VPS CyberSec Orchestrator — Idempotent Hardening Engine"
+echo "🛡️  VPS CyberSec Orchestrator — Idempotent Hardening Engine (v1.0.1)"
 echo "Dry-Run Mode : $([[ $DRY_RUN -eq 1 ]] && echo 'ENABLED (Simulation Only)' || echo 'DISABLED (Active Mutation)')"
 echo "========================================================================"
 
@@ -32,11 +32,41 @@ if [[ $DRY_RUN -eq 0 && $CONFIRM -eq 0 ]]; then
     exit 1
 fi
 
-if [[ $DRY_RUN -eq 0 ]]; then
-    echo "[!] Arming Anti-Lockout Dead-Man's Switch (5 minutes safety window)..."
-    if [[ -x "$GUARD_SCRIPT" ]]; then
-        bash "$GUARD_SCRIPT" arm 5
+if [[ $EUID -ne 0 && $DRY_RUN -eq 0 ]]; then
+    echo "[-] Error: Root privileges are required to apply system hardening."
+    exit 1
+fi
+
+# Detect active SSH port dynamically
+ACTIVE_SSH_PORT="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || echo '22')"
+ACTIVE_SSH_PORT="${ACTIVE_SSH_PORT:-22}"
+
+# Pre-flight check: ensure at least one authorized_keys file has content before disabling password auth
+HAS_AUTH_KEYS=0
+if [[ -s /root/.ssh/authorized_keys ]]; then
+    HAS_AUTH_KEYS=1
+fi
+for user_home in /home/*; do
+    if [[ -s "$user_home/.ssh/authorized_keys" ]]; then
+        HAS_AUTH_KEYS=1
+        break
     fi
+done
+
+if [[ $HAS_AUTH_KEYS -eq 0 && $DRY_RUN -eq 0 ]]; then
+    echo "⚠️  [PRE-FLIGHT WARNING]: No populated authorized_keys file found in /root or /home/*."
+    echo "    Disabling PasswordAuthentication without public keys will lock you out!"
+    echo "    Please add your SSH public key to ~/.ssh/authorized_keys before proceeding."
+    exit 1
+fi
+
+if [[ $DRY_RUN -eq 0 ]]; then
+    if [[ ! -f "$GUARD_SCRIPT" ]]; then
+        echo "[-] Error: Anti-lockout guard script not found at $GUARD_SCRIPT"
+        exit 1
+    fi
+    echo "[!] Arming Anti-Lockout Dead-Man's Switch (5 minutes safety window)..."
+    bash "$GUARD_SCRIPT" arm 5
 fi
 
 # 1. Kernel Sysctl Hardening
@@ -74,10 +104,10 @@ else
     echo " -> [OK] Kernel parameters successfully applied."
 fi
 
-# 2. OpenSSH Server Hardening
-echo "[2/4] Applying OpenSSH Configuration Hardening..."
-SSHD_CONF="/etc/ssh/sshd_config.d/99-vps-hardening.conf"
-SSHD_CONTENT="# CIS Linux 5.2 OpenSSH Daemon Hardening
+# 2. OpenSSH Server Hardening (00- prefix ensures first-match-wins precedence over cloud-init drop-ins)
+echo "[2/4] Applying OpenSSH Configuration Hardening (detected port: $ACTIVE_SSH_PORT)..."
+SSHD_CONF="/etc/ssh/sshd_config.d/00-vps-hardening.conf"
+SSHD_CONTENT="# CIS Linux 5.2 OpenSSH Daemon Hardening (First-Match-Wins Priority)
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
@@ -93,51 +123,81 @@ if [[ $DRY_RUN -eq 1 ]]; then
 else
     mkdir -p /etc/ssh/sshd_config.d/
     echo "$SSHD_CONTENT" > "$SSHD_CONF"
+    
+    # Neutralize conflicting PasswordAuthentication yes in cloud-init configs if present
+    if [[ -f /etc/ssh/sshd_config.d/50-cloud-init.conf ]]; then
+        sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config.d/50-cloud-init.conf 2>/dev/null || true
+    fi
+
     if sshd -t; then
-        systemctl reload ssh || systemctl restart ssh || service ssh restart || true
-        echo " -> [OK] OpenSSH syntax validated and reloaded safely."
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl reload ssh 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+        elif command -v service >/dev/null 2>&1; then
+            service ssh restart 2>/dev/null || service sshd restart 2>/dev/null || true
+        elif command -v rc-service >/dev/null 2>&1; then
+            rc-service sshd restart 2>/dev/null || true
+        fi
+        echo " -> [OK] OpenSSH syntax validated and service reloaded."
     else
-        echo " -> [ERROR] sshd syntax validation failed! Reverting..."
+        echo " -> [ERROR] sshd syntax validation failed! Reverting drop-in..."
         rm -f "$SSHD_CONF"
         exit 1
     fi
 fi
 
-# 3. Host Firewall Hardening (UFW)
-echo "[3/4] Enforcing Host Firewall Default-Deny Policy..."
+# 3. Host Firewall Hardening (UFW) with Dynamic SSH Port Detection
+echo "[3/4] Enforcing Host Firewall Default-Deny Policy (SSH Port: $ACTIVE_SSH_PORT/tcp)..."
 if command -v ufw >/dev/null 2>&1; then
     if [[ $DRY_RUN -eq 1 ]]; then
-        echo " -> [DRY-RUN] Would configure UFW default deny incoming, allow 22/tcp rate-limited, allow 80/443."
+        echo " -> [DRY-RUN] Would configure UFW default deny incoming, limit $ACTIVE_SSH_PORT/tcp, allow 80/443."
     else
         ufw default deny incoming >/dev/null 2>&1
         ufw default allow outgoing >/dev/null 2>&1
-        ufw limit 22/tcp comment 'SSH Rate Limited' >/dev/null 2>&1 || true
+        ufw limit "${ACTIVE_SSH_PORT}/tcp" comment 'SSH Rate Limited' >/dev/null 2>&1 || true
         ufw allow 80/tcp comment 'HTTP' >/dev/null 2>&1 || true
         ufw allow 443/tcp comment 'HTTPS' >/dev/null 2>&1 || true
         ufw --force enable >/dev/null 2>&1
-        echo " -> [OK] UFW default-deny policy enabled."
+        echo " -> [OK] UFW default-deny policy enabled with ${ACTIVE_SSH_PORT}/tcp protected."
     fi
 fi
 
-# 4. Docker Daemon Hardening (Live Restore)
-echo "[4/4] Auditing Docker Daemon Configuration..."
+# 4. Docker Daemon Hardening (Safe Merge for live-restore)
+echo "[4/4] Auditing Docker Daemon Configuration (live-restore)..."
 DOCKER_DAEMON="/etc/docker/daemon.json"
 if command -v docker >/dev/null 2>&1 && [[ -d /etc/docker ]]; then
     if [[ $DRY_RUN -eq 1 ]]; then
-        echo " -> [DRY-RUN] Would ensure 'live-restore': true in $DOCKER_DAEMON."
+        echo " -> [DRY-RUN] Would ensure 'live-restore': true in $DOCKER_DAEMON without breaking existing keys."
     else
-        if [[ ! -f "$DOCKER_DAEMON" ]]; then
-            echo '{"live-restore": true}' > "$DOCKER_DAEMON"
+        python3 - "$DOCKER_DAEMON" << 'PYEOF'
+import sys, json, pathlib
+p = pathlib.Path(sys.argv[1])
+data = {}
+if p.exists() and p.stat().st_size > 0:
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+if data.get("live-restore") is not True:
+    data["live-restore"] = True
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print(" -> [OK] Merged 'live-restore': true into daemon.json.")
+else:
+    print(" -> [OK] Docker daemon.json already configured with live-restore.")
+PYEOF
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl reload docker 2>/dev/null || true
         fi
-        echo " -> [OK] Docker daemon configuration validated."
     fi
 fi
 
 if [[ $DRY_RUN -eq 0 ]]; then
     echo "========================================================================"
-    echo "✅ Hardening applied successfully. Verifying session and disarming switch..."
-    if [[ -x "$GUARD_SCRIPT" ]]; then
-        bash "$GUARD_SCRIPT" disarm
-    fi
+    echo "🚨 IMPORTANT: Anti-Lockout Dead-Man's Switch is currently ARMED (5 min)."
+    echo "   1. DO NOT CLOSE THIS CURRENT TERMINAL."
+    echo "   2. Open a NEW terminal window and test SSH connectivity:"
+    echo "      ssh -p ${ACTIVE_SSH_PORT} <user>@<host>"
+    echo "   3. Once connectivity is verified, DISARM the safety switch by running:"
+    echo "      sudo bash $GUARD_SCRIPT disarm"
+    echo "   If connectivity fails, the server will automatically rollback in 5 min."
     echo "========================================================================"
 fi
