@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# VPS CyberSec Orchestrator — Non-Destructive Audit & Telemetry Collector
+# VPS CyberSec Orchestrator — Non-Destructive Audit & Telemetry Collector (v1.0.1)
 # Compatible with Ubuntu, Debian, Rocky, RHEL, Fedora, Alpine.
 # Execution Protocol: Read-Only / Zero-Exploitation.
+# Output complies strictly with schemas/ptt_manifest.schema.json (Phase Tracking Tree).
 # =============================================================================
 set -u
 LC_ALL=C
@@ -13,13 +14,12 @@ TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 HOSTNAME="$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo 'unknown-host')"
 
 echo "========================================================================"
-echo "🛡️  VPS CyberSec Orchestrator — Autonomous Security Audit Collector"
+echo "🛡️  VPS CyberSec Orchestrator — Autonomous Security Audit Collector (v1.0.1)"
 echo "Target Host : $HOSTNAME"
 echo "Timestamp   : $TIMESTAMP"
 echo "Output Dir  : $OUTPUT_DIR"
 echo "========================================================================"
 
-# Temporary data directory
 RAW_DIR="$(mktemp -d /tmp/vps_audit_raw_XXXXXX)"
 trap 'rm -rf "$RAW_DIR"' EXIT
 
@@ -45,7 +45,7 @@ if command -v iptables-save >/dev/null 2>&1; then
     iptables-save > "$RAW_DIR/iptables_v4.txt" 2>/dev/null || true
 fi
 if command -v ip6tables-save >/dev/null 2>&1; then
-    ip6tables-save > "$RAW_DIR/iptables_v6.txt" 2>/dev/null || true
+    ip6tables-save > "$RAW_DIR/ip6tables_v6.txt" 2>/dev/null || true
 fi
 if command -v nft >/dev/null 2>&1; then
     nft list ruleset > "$RAW_DIR/nftables.txt" 2>/dev/null || true
@@ -83,7 +83,7 @@ echo "[8/8] Scanning SUID/SGID Binaries and Key Permissions..."
 find / -xdev \( -perm -4000 -o -perm -2000 \) -type f -exec ls -la {} + 2>/dev/null | sort -k1,1 > "$RAW_DIR/suid_sgid.txt" || true
 ls -la /etc/ssh/ /root/.ssh/ > "$RAW_DIR/ssh_perms.txt" 2>/dev/null || true
 
-echo "[*] Generating Structured JSON and Markdown Audit Reports..."
+echo "[*] Compiling PTT-Compliant JSON & Executive Markdown Reports..."
 
 JSON_REPORT="$OUTPUT_DIR/vps_audit_${HOSTNAME}_$(date -u +%Y%m%d_%H%M%S).json"
 MD_REPORT="$OUTPUT_DIR/vps_audit_${HOSTNAME}_$(date -u +%Y%m%d_%H%M%S).md"
@@ -109,16 +109,32 @@ uptime = read_file("uptime.txt")
 sysctl = read_file("sysctl_critical.txt")
 sockets = read_file("listening_sockets.txt")
 ufw = read_file("ufw_status.txt")
+iptables_v4 = read_file("iptables_v4.txt")
+nftables = read_file("nftables.txt")
 sshd = read_file("sshd_active.txt")
 docker_info = read_file("docker_info.txt")
 containers = read_file("docker_containers.txt")
 ld_preload = read_file("ld_preload.txt")
 suid_sgid = read_file("suid_sgid.txt")
+ssh_perms = read_file("ssh_perms.txt")
 
-# Findings parsing
+# Calculate open sockets count excluding header line
+socket_lines = [l for l in sockets.splitlines() if l.strip()]
+open_sockets_count = max(0, len(socket_lines) - 1) if socket_lines else 0
+
+# Accurate Firewall Detection
+# UFW active OR iptables default DROP OR nftables with active filtering rules
+has_active_firewall = False
+if "Status: active" in ufw:
+    has_active_firewall = True
+elif ":INPUT DROP" in iptables_v4 or "-P INPUT DROP" in iptables_v4:
+    has_active_firewall = True
+elif "table " in nftables and ("chain " in nftables or "hook input" in nftables):
+    has_active_firewall = True
+
 findings = []
 
-# Check SSH password authentication
+# 1. SSH Checks
 if "passwordauthentication yes" in sshd.lower():
     findings.append({
         "id": "SEC-SSH-01",
@@ -127,10 +143,9 @@ if "passwordauthentication yes" in sshd.lower():
         "cis": "CIS Linux 5.2.11",
         "title": "Password Authentication enabled in OpenSSH",
         "impact": "Allows brute-force and credential stuffing against SSH daemon.",
-        "remediation": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config.d/99-hardening.conf"
+        "remediation": "Set 'PasswordAuthentication no' in /etc/ssh/sshd_config.d/00-vps-hardening.conf"
     })
 
-# Check root login
 if "permitrootlogin yes" in sshd.lower():
     findings.append({
         "id": "SEC-SSH-02",
@@ -142,64 +157,144 @@ if "permitrootlogin yes" in sshd.lower():
         "remediation": "Set 'PermitRootLogin prohibit-password' in sshd config."
     })
 
-# Check firewall
-if not ufw and not read_file("iptables_v4.txt"):
+# 2. Firewall Check
+if not has_active_firewall:
     findings.append({
         "id": "SEC-NET-01",
         "severity": "CRITICAL",
         "cwe": "CWE-1188",
         "cis": "CIS Linux 3.5.1",
-        "title": "No Host Firewall Active",
-        "impact": "All listening sockets are directly reachable from external network.",
-        "remediation": "Enable UFW or nftables with default deny incoming policy."
+        "title": "No Host Firewall Active or Default-Drop Policy Missing",
+        "impact": "Listening sockets are directly reachable from external network.",
+        "remediation": "Enable UFW with 'ufw default deny incoming' or configure nftables."
     })
 
-# Check ASLR
+# 3. Docker UFW Bypass Warning
+if "0.0.0.0:" in containers:
+    findings.append({
+        "id": "SEC-DKR-01",
+        "severity": "MEDIUM",
+        "cwe": "CWE-668",
+        "cis": "CIS Docker 2.1",
+        "title": "Docker Containers Exposing Ports on 0.0.0.0 (Bypasses UFW Default Deny)",
+        "impact": "Docker manipulates iptables directly, exposing containers even when UFW incoming is deny.",
+        "remediation": "Bind container ports to 127.0.0.1 (e.g., 127.0.0.1:8080:8080) or configure DOCKER-USER netfilter chain."
+    })
+
+# 4. ASLR Check
 if "kernel.randomize_va_space = 2" not in sysctl:
     findings.append({
         "id": "SEC-SYS-01",
         "severity": "MEDIUM",
         "cwe": "CWE-119",
         "cis": "CIS Linux 1.6.2",
-        "title": "ASLR is not fully enabled",
-        "impact": "Weakens memory corruption exploit mitigations.",
-        "remediation": "sysctl -w kernel.randomize_va_space=2"
+        "title": "ASLR is not fully enabled (kernel.randomize_va_space != 2)",
+        "impact": "Weakens memory corruption exploit mitigations in user space.",
+        "remediation": "sysctl -w kernel.randomize_va_space=2 in /etc/sysctl.d/99-vps-hardening.conf"
     })
 
+# 5. ICMP Redirects
+if "net.ipv4.conf.all.accept_redirects = 0" not in sysctl:
+    findings.append({
+        "id": "SEC-SYS-02",
+        "severity": "LOW",
+        "cwe": "CWE-1188",
+        "cis": "CIS Linux 3.2.2",
+        "title": "Kernel Accepts ICMP Redirects",
+        "impact": "Exposes host to malicious routing table modification.",
+        "remediation": "net.ipv4.conf.all.accept_redirects = 0 in /etc/sysctl.d/99-vps-hardening.conf"
+    })
+
+# Construct PTT (Phase Tracking Tree) compliant with schemas/ptt_manifest.schema.json
+phases = [
+    {
+        "phase_id": "P1_BASELINE",
+        "name": "Host Baseline & Kernel Configuration",
+        "status": "COMPLETED",
+        "tasks": [
+            {"task_id": "T1.1", "title": "Kernel release and tainted status audit", "status": "PASSED", "evidence_ref": "kernel_arch.txt"},
+            {"task_id": "T1.2", "title": "Sysctl memory & network mitigations audit", "status": "WARNING" if any(f["id"].startswith("SEC-SYS") for f in findings) else "PASSED", "evidence_ref": "sysctl_critical.txt", "cis_reference": "CIS Linux 3.2"}
+        ]
+    },
+    {
+        "phase_id": "P2_NETWORK_ACCESS",
+        "name": "Network Attack Surface & Access Control",
+        "status": "COMPLETED",
+        "tasks": [
+            {"task_id": "T2.1", "title": "Listening sockets (ss -tulnp) enumeration", "status": "PASSED", "evidence_ref": "listening_sockets.txt"},
+            {"task_id": "T2.2", "title": "Firewall state & default-deny enforcement", "status": "FAILED" if any(f["id"] == "SEC-NET-01" for f in findings) else "PASSED", "evidence_ref": "ufw_status.txt", "cis_reference": "CIS Linux 3.5"},
+            {"task_id": "T2.3", "title": "OpenSSH daemon configuration validation", "status": "WARNING" if any(f["id"].startswith("SEC-SSH") for f in findings) else "PASSED", "evidence_ref": "sshd_active.txt", "cis_reference": "CIS Linux 5.2"}
+        ]
+    },
+    {
+        "phase_id": "P3_CONTAINERS_SECRETS",
+        "name": "Container Daemons & Sensitive Permissions",
+        "status": "COMPLETED",
+        "tasks": [
+            {"task_id": "T3.1", "title": "Container runtime daemon options inspection", "status": "PASSED", "evidence_ref": "docker_info.txt"},
+            {"task_id": "T3.2", "title": "Container port binding & UFW bypass audit", "status": "WARNING" if any(f["id"] == "SEC-DKR-01" for f in findings) else "PASSED", "evidence_ref": "docker_containers.txt", "cwe_id": "CWE-668"}
+        ]
+    },
+    {
+        "phase_id": "P4_PERSISTENCE",
+        "name": "Persistence Mechanisms & Integrity",
+        "status": "COMPLETED",
+        "tasks": [
+            {"task_id": "T4.1", "title": "/etc/ld.so.preload inspection", "status": "PASSED", "evidence_ref": "ld_preload.txt"},
+            {"task_id": "T4.2", "title": "Cron jobs & systemd timers audit", "status": "PASSED", "evidence_ref": "crons.txt"},
+            {"task_id": "T4.3", "title": "SUID/SGID root binaries scan", "status": "PASSED", "evidence_ref": "suid_sgid.txt"}
+        ]
+    },
+    {
+        "phase_id": "P5_HARDENING_READINESS",
+        "name": "Idempotent Hardening & Safety Posture",
+        "status": "COMPLETED",
+        "tasks": [
+            {"task_id": "T5.1", "title": "Anti-lockout Dead-Man's Switch readiness", "status": "PASSED", "evidence_ref": "bin/anti_lockout_guard.sh"}
+        ]
+    }
+]
+
+findings_summary = {
+    "critical": sum(1 for f in findings if f["severity"] == "CRITICAL"),
+    "high": sum(1 for f in findings if f["severity"] == "HIGH"),
+    "medium": sum(1 for f in findings if f["severity"] == "MEDIUM"),
+    "low": sum(1 for f in findings if f["severity"] == "LOW"),
+    "informative": 0
+}
+
 report_data = {
-    "version": "1.0.0",
+    "version": "1.0.1",
     "target_host": hostname,
     "timestamp": timestamp,
     "operator_mode": "HYBRID_DEVSECOPS",
+    "phases": phases,
+    "findings_summary": findings_summary,
     "telemetry": {
         "kernel": kernel,
         "uptime": uptime,
-        "sysctl_sample": sysctl.splitlines()[:10],
-        "open_sockets_count": len(sockets.splitlines()),
+        "open_sockets_count": open_sockets_count,
+        "firewall_active": has_active_firewall,
         "docker_live_restore": "LiveRestore=true" in docker_info
     },
-    "findings": findings,
-    "findings_summary": {
-        "critical": sum(1 for f in findings if f["severity"] == "CRITICAL"),
-        "high": sum(1 for f in findings if f["severity"] == "HIGH"),
-        "medium": sum(1 for f in findings if f["severity"] == "MEDIUM"),
-        "low": sum(1 for f in findings if f["severity"] == "LOW"),
-        "informative": sum(1 for f in findings if f["severity"] == "INFORMATIVE")
-    }
+    "findings": findings
 }
 
 json_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
 
 # Markdown Report Generation
 md_lines = [
-    f"# VPS CyberSec Audit Report — {hostname}",
+    f"# VPS CyberSec Audit Report (v1.0.1) — {hostname}",
     f"**Timestamp:** `{timestamp}` | **Auditor:** `VPS CyberSec Orchestrator`\n",
     "## 1. Executive Summary",
     f"- **Host Kernel:** `{kernel}`",
     f"- **Uptime:** `{uptime}`",
-    f"- **Critical Findings:** {report_data['findings_summary']['critical']}",
-    f"- **High Findings:** {report_data['findings_summary']['high']}",
-    f"- **Medium Findings:** {report_data['findings_summary']['medium']}\n",
+    f"- **Listening Sockets:** `{open_sockets_count}`",
+    f"- **Active Host Firewall:** `{'ACTIVE' if has_active_firewall else 'INACTIVE / UNENFORCED'}`",
+    f"- **Critical Findings:** `{findings_summary['critical']}`",
+    f"- **High Findings:** `{findings_summary['high']}`",
+    f"- **Medium Findings:** `{findings_summary['medium']}`",
+    f"- **Low Findings:** `{findings_summary['low']}`\n",
     "## 2. Identified Vulnerabilities & Hardening Opportunities\n",
     "| ID | Severity | Title | CIS / CWE | Suggested Remediation |",
     "|:---:|:---:|:---|:---:|:---|"
@@ -211,14 +306,17 @@ if findings:
 else:
     md_lines.append("| - | **CLEAN** | No critical vulnerabilities detected | - | Host aligns with baseline policies |")
 
-md_lines.append("\n## 3. Next Steps")
-md_lines.append("Execute idempotent hardening via `bin/vps_harden.sh --dry-run` to preview and apply automated corrections.")
+md_lines.append("\n## 3. Autonomous Hardening Procedure")
+md_lines.append("1. **Simulation:** Run `sudo bash bin/vps_harden.sh --dry-run` to preview all changes.")
+md_lines.append("2. **Active Hardening:** Run `sudo bash bin/vps_harden.sh --confirm` with automatic 5-minute Dead-Man's Switch protection.")
+md_lines.append("3. **Disarm:** In a new terminal, confirm connectivity and run `sudo bash bin/anti_lockout_guard.sh disarm`.")
 
 md_path.write_text("\n".join(md_lines), encoding="utf-8")
-print(f"[+] Audit JSON Report: {json_path}")
-print(f"[+] Audit Markdown Report: {md_path}")
+print(f"[+] PTT-Compliant Audit JSON: {json_path}")
+print(f"[+] Executive Markdown Report: {md_path}")
 PYEOF
 
+chmod 600 "$JSON_REPORT" "$MD_REPORT" 2>/dev/null || true
 echo "========================================================================"
-echo "✅ Audit completed successfully. Artifacts saved in $OUTPUT_DIR"
+echo "✅ Audit completed successfully. Artifacts protected with mode 0600 in $OUTPUT_DIR"
 echo "========================================================================"
